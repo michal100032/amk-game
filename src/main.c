@@ -10,18 +10,59 @@
 #include "amcom.h"
 #include "amcom_packets.h"
 
+#include "game.h"
+
 void amcomPacketHandler(AMCOM_Packet const *packet, void *userContext) {
   uint8_t buf[AMCOM_MAX_PACKET_SIZE];              // buffer used to serialize outgoing packets
   size_t toSend = 0;                               // size of the outgoing packet
   SOCKET ConnectSocket = *((SOCKET *)userContext); // socket used for communication with the server
 
   switch(packet->header.type) {
-  case AMCOM_IDENTIFY_REQUEST:
-    printf("Got IDENTIFY.request. Responding with IDENTIFY.response\n");
-    AMCOM_IdentifyResponsePayload identifyResponse;
-    sprintf(identifyResponse.playerName, "mniAM player");
-    toSend = AMCOM_Serialize(AMCOM_IDENTIFY_RESPONSE, &identifyResponse, sizeof(identifyResponse), buf);
-    break;
+    case AMCOM_IDENTIFY_REQUEST: {
+      printf("Got IDENTIFY.request. Responding with IDENTIFY.response\n");
+      AMCOM_IdentifyResponsePayload identifyResponse;
+      (void)sprintf(identifyResponse.playerName, "mniAM player");
+      toSend = AMCOM_Serialize(AMCOM_IDENTIFY_RESPONSE, &identifyResponse, sizeof(identifyResponse), buf);
+      break;
+    }
+    case AMCOM_NEW_GAME_REQUEST: {
+      AMCOM_NewGameRequestPayload const *newGameRequest = (AMCOM_NewGameRequestPayload const *)packet->payload;
+      game_set_params(newGameRequest->playerNumber, newGameRequest->numberOfPlayers, newGameRequest->mapWidth, newGameRequest->mapHeight);
+      printf("Got NEW_GAME.request. Responding with NEW_GAME.response\n");
+      AMCOM_NewGameResponsePayload newGameResponse;
+      (void)sprintf(newGameResponse.helloMessage, "Hello, I'm player %d", newGameRequest->playerNumber);
+      toSend = AMCOM_Serialize(AMCOM_NEW_GAME_RESPONSE, &newGameResponse, sizeof(newGameResponse), buf);
+      break;
+    }
+    case AMCOM_OBJECT_UPDATE_REQUEST: {
+      AMCOM_ObjectUpdateRequestPayload const *objectUpdateRequest = (AMCOM_ObjectUpdateRequestPayload const *)packet->payload;
+      for(size_t i = 0; i < packet->header.length / sizeof(AMCOM_ObjectState); i++) {
+        game_update_object(objectUpdateRequest->objectState[i].objectType, objectUpdateRequest->objectState[i].objectNo, objectUpdateRequest->objectState[i].hp, objectUpdateRequest->objectState[i].x, objectUpdateRequest->objectState[i].y);
+      }
+      break;
+    }
+    case AMCOM_MOVE_REQUEST: {
+      float angle;
+      uint8_t action;
+      game_get_action(&angle, &action);
+      AMCOM_MoveResponsePayload moveResponse = {
+          .angle = angle,
+          .action = action
+      };
+      toSend = AMCOM_Serialize(AMCOM_MOVE_RESPONSE, &moveResponse, sizeof(moveResponse), buf);
+      break;
+    }
+    case AMCOM_GAME_OVER_REQUEST: {
+      AMCOM_GameOverResponsePayload gameOverResponse = {
+          .endMessage = "Goodbye, cruel world!"
+      };
+      toSend = AMCOM_Serialize(AMCOM_GAME_OVER_RESPONSE, &gameOverResponse, sizeof(gameOverResponse), buf);
+      break;
+    }
+    default: {
+      printf("Got unknown packet type %d. Ignoring.\n", packet->header.type);
+      break;
+    }
   }
 
   // if there is something to send back - do it
