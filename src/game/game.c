@@ -18,11 +18,11 @@ static float m_mapHeight;
 
 #define REPULSION_GLUE            (-10.0e6f)
 #define REPULSION_SPARK           ( -0.6e6f)
-#define REPULSION_BIGGER_PLAYER   ( -2.0e5f) //placeholder with angle experiments
-//#define REPULSION_BIGGER_PLAYER   ( -1.0e6f)
+//#define REPULSION_BIGGER_PLAYER   ( -5.0e5f) //placeholder with angle experiments
+#define REPULSION_BIGGER_PLAYER   ( -1.0e6f)
 #define ATTRACTION_FOOD           ( 240.0f)
 #define ATTRACTION_SMALLER_PLAYER ( 120.0f)
-#define IN_SIGHT_MODIFIER         ( 75.0f)
+#define IN_SIGHT_MODIFIER         ( 10.0f)
 
 #define BIGGER_PLAYER_THRESHOLD 100.0f
 
@@ -32,6 +32,13 @@ enum object_type {
     OBJECT_TYPE_SPARK = 2,
     OBJECT_TYPE_GLUE = 3
 };
+
+//WIP
+//enum BotState {
+ //   BOT_EAT,
+ //   BOT_HUNT,
+ //   BOT_RUN
+//};
 
 struct GameObject {
     enum object_type objectType; // 0 = player, 1 = food, 2 = spark, 3 = glue
@@ -84,7 +91,10 @@ static void update_object_state(uint8_t objectType, uint16_t objectNo, int8_t hp
     }
     if(object != NULL) {
         //update previous position
-        if(object->hasPreviousPosition) {
+        if(!object->hasPreviousPosition) {
+            object->xPrev = x;
+            object->yPrev = y;
+        } else {
             object->xPrev = object->x;
             object->yPrev = object->y;
         }
@@ -167,12 +177,12 @@ static void get_object_force(struct GameObject const *object, float *forceX, flo
         case OBJECT_TYPE_PLAYER:
             if (object->hp >= m_players[m_playerNumber].hp) {
                 // bigger player attracts the player
-                float scalar = 1.0f;
-                if (is_in_sight(&m_players[m_playerNumber])) {
-                    scalar = IN_SIGHT_MODIFIER;
-                }
-                *forceX += REPULSION_BIGGER_PLAYER * inverseDistanceSquared * inverseDistanceSquared * distanceX * scalar;
-                *forceY += REPULSION_BIGGER_PLAYER * inverseDistanceSquared * inverseDistanceSquared * distanceY * scalar;
+                //float scalar = 1.0f;
+                //if (is_in_sight((struct GameObject *)object)) {
+                 //   scalar = IN_SIGHT_MODIFIER;
+                //}
+                *forceX += REPULSION_BIGGER_PLAYER * inverseDistanceSquared * inverseDistanceSquared * distanceX; //* scalar
+                *forceY += REPULSION_BIGGER_PLAYER * inverseDistanceSquared * inverseDistanceSquared * distanceY; //* scalar
             } else if(object->hp < m_players[m_playerNumber].hp) {
                 // smaller player repels the player
                 *forceX += ATTRACTION_SMALLER_PLAYER * inverseDistanceSquared * distanceX;
@@ -203,10 +213,10 @@ static void get_object_force(struct GameObject const *object, float *forceX, flo
 }
 
 static void get_total_force(float *forceX, float *forceY) {
-    float objectForceX = 0.0f;
-    float objectForceY = 0.0f;
     for(size_t i = 0; i < MAX_PLAYERS; i++) {
         if(m_players[i].hp > 0 && i != m_playerNumber) { // only consider other players that are still alive
+            float objectForceX = 0.0f;
+            float objectForceY = 0.0f;
             get_object_force(&m_players[i], &objectForceX, &objectForceY);
             *forceX += objectForceX;
             *forceY += objectForceY;
@@ -214,6 +224,8 @@ static void get_total_force(float *forceX, float *forceY) {
     }
     for(size_t i = 0; i < MAX_FOOD; i++) {
         if(m_food[i].hp > 0) { // only consider food that is still available
+            float objectForceX = 0.0f;
+            float objectForceY = 0.0f;
             get_object_force(&m_food[i], &objectForceX, &objectForceY);
             *forceX += objectForceX;
             *forceY += objectForceY;
@@ -221,6 +233,8 @@ static void get_total_force(float *forceX, float *forceY) {
     }
     for(size_t i = 0; i < MAX_SPARKS; i++) {
         if(m_sparks[i].hp > 0) { // only consider sparks that are still active
+            float objectForceX = 0.0f;
+            float objectForceY = 0.0f;
             get_object_force(&m_sparks[i], &objectForceX, &objectForceY);
             *forceX += objectForceX;
             *forceY += objectForceY;
@@ -228,6 +242,8 @@ static void get_total_force(float *forceX, float *forceY) {
     }
     for(size_t i = 0; i < MAX_GLUE; i++) {
         if(m_glue[i].hp > 0) { // only consider glue that is still active
+            float objectForceX = 0.0f;
+            float objectForceY = 0.0f;
             get_object_force(&m_glue[i], &objectForceX, &objectForceY);
             *forceX += objectForceX;
             *forceY += objectForceY;
@@ -241,9 +257,9 @@ static bool is_bigger_player_ahead(void) {
                                 (m_players[i].y - m_players[m_playerNumber].y) * (m_players[i].y - m_players[m_playerNumber].y);
                       
         if(distanceSquared < BIGGER_PLAYER_THRESHOLD && m_players[i].hp > m_players[m_playerNumber].hp) {
-            if(is_in_sight(&m_players[i])) {
+            //if(is_in_sight(&m_players[i])) {
                 return true;
-            }
+            //}
         }
     }
     return false;
