@@ -18,9 +18,11 @@ static float m_mapHeight;
 
 #define REPULSION_GLUE            (-10.0e6f)
 #define REPULSION_SPARK           ( -0.6e6f)
+//#define REPULSION_BIGGER_PLAYER   ( -2.0e5f)
 #define REPULSION_BIGGER_PLAYER   ( -1.0e6f)
 #define ATTRACTION_FOOD           ( 240.0f)
 #define ATTRACTION_SMALLER_PLAYER ( 120.0f)
+#define IN_SIGHT_MODIFIER         ( 75.0f)
 
 #define BIGGER_PLAYER_THRESHOLD 100.0f
 
@@ -36,6 +38,11 @@ struct GameObject {
     int8_t hp; // object hp
     float x; // X position on map
     float y; // Y position on map
+
+    float xPrev; // previous X position
+    float yPrev; // previous Y position
+
+    bool hasPreviousPosition;
 };
 
 static struct GameObject m_players[MAX_PLAYERS];
@@ -76,10 +83,51 @@ static void update_object_state(uint8_t objectType, uint16_t objectNo, int8_t hp
             break;
     }
     if(object != NULL) {
+        //update previous position
+        if(object->hasPreviousPosition) {
+            object->xPrev = object->x;
+            object->yPrev = object->y;
+        }
+
         object->objectType = (enum object_type)objectType;
+
         object->hp = hp;
         object->x = x;
         object->y = y;
+        object->hasPreviousPosition = true;
+    }
+}
+
+//get angle at wich the player is pointing
+static float get_players_angle(struct GameObject *object) {
+    if(OBJECT_TYPE_PLAYER == object->objectType) {
+        if(object->hasPreviousPosition) {
+            return atan2f(object->x - object->xPrev, object->y - object->yPrev);
+        }
+    }
+    return 0.0f;
+}
+
+//get angle between player and our mcu
+static float get_angle_relative(struct GameObject *object) {
+    if(OBJECT_TYPE_PLAYER == object->objectType) {
+        if(object->hasPreviousPosition) {
+            return atan2f(m_players[m_playerNumber].x - object->x, m_players[m_playerNumber].y - object->y);
+        }
+    }
+    return 0.0f;
+}
+
+//are we "in sight" of the other player
+static bool is_in_sight(struct GameObject *object) {
+    float angleRelative = get_angle_relative(object);
+    float angleDerivative = get_players_angle(object);
+    float dot = cosf(angleRelative - angleDerivative);
+
+    if (dot > cosf(M_PI / 3.0f)) {
+        return true;
+    } else {
+        return false;
     }
 }
 
@@ -115,8 +163,12 @@ static void get_object_force(struct GameObject const *object, float *forceX, flo
         case OBJECT_TYPE_PLAYER:
             if (object->hp >= m_players[m_playerNumber].hp) {
                 // bigger player attracts the player
-                *forceX += REPULSION_BIGGER_PLAYER * inverseDistanceSquared * inverseDistanceSquared * distanceX;
-                *forceY += REPULSION_BIGGER_PLAYER * inverseDistanceSquared * inverseDistanceSquared * distanceY;
+                float scalar = 1.0f;
+                //if (is_in_sight(&m_players[m_playerNumber])) {
+                    //scalar = IN_SIGHT_MODIFIER;
+                //}
+                *forceX += REPULSION_BIGGER_PLAYER * inverseDistanceSquared * inverseDistanceSquared * distanceX * scalar;
+                *forceY += REPULSION_BIGGER_PLAYER * inverseDistanceSquared * inverseDistanceSquared * distanceY * scalar;
             } else if(object->hp < m_players[m_playerNumber].hp) {
                 // smaller player repels the player
                 *forceX += ATTRACTION_SMALLER_PLAYER * inverseDistanceSquared * distanceX;
@@ -183,8 +235,9 @@ static bool is_bigger_player_ahead(void) {
     for(size_t i = 0; i < MAX_PLAYERS; i++) {
         float distanceSquared = (m_players[i].x - m_players[m_playerNumber].x) * (m_players[i].x - m_players[m_playerNumber].x) +
                                 (m_players[i].y - m_players[m_playerNumber].y) * (m_players[i].y - m_players[m_playerNumber].y);
-        
+                      
         if(distanceSquared < BIGGER_PLAYER_THRESHOLD && m_players[i].hp > m_players[m_playerNumber].hp) {
+            //if(is_in_sight(&m_players[i]));
             return true;
         }
     }
@@ -200,6 +253,7 @@ void game_get_action(float *angle, uint8_t *action) {
     *angle = atan2f(forceY, forceX);
     printf("Angle: %f\n", *angle);
     *action = is_bigger_player_ahead() ? 1 : 0; // drop spark if there is a bigger player ahead, otherwise do nothing
+
 
     // uint8_t foodIndex = get_nearest_food_index(m_players[m_playerNumber].x, m_players[m_playerNumber].y);
     // if(foodIndex != (uint8_t)-1) {
