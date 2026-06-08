@@ -18,8 +18,8 @@ static float m_mapHeight;
 
 #define REPULSION_GLUE            (-10.0e6f)
 #define REPULSION_SPARK           ( -0.6e6f)
-//#define REPULSION_BIGGER_PLAYER   ( -2.0e5f)
-#define REPULSION_BIGGER_PLAYER   ( -1.0e6f)
+#define REPULSION_BIGGER_PLAYER   ( -2.0e5f) //placeholder with angle experiments
+//#define REPULSION_BIGGER_PLAYER   ( -1.0e6f)
 #define ATTRACTION_FOOD           ( 240.0f)
 #define ATTRACTION_SMALLER_PLAYER ( 120.0f)
 #define IN_SIGHT_MODIFIER         ( 75.0f)
@@ -102,7 +102,9 @@ static void update_object_state(uint8_t objectType, uint16_t objectNo, int8_t hp
 static float get_players_angle(struct GameObject *object) {
     if(OBJECT_TYPE_PLAYER == object->objectType) {
         if(object->hasPreviousPosition) {
-            return atan2f(object->x - object->xPrev, object->y - object->yPrev);
+            return atan2f(
+                object->y - object->yPrev,
+                object->x - object->xPrev);
         }
     }
     return 0.0f;
@@ -112,7 +114,9 @@ static float get_players_angle(struct GameObject *object) {
 static float get_angle_relative(struct GameObject *object) {
     if(OBJECT_TYPE_PLAYER == object->objectType) {
         if(object->hasPreviousPosition) {
-            return atan2f(m_players[m_playerNumber].x - object->x, m_players[m_playerNumber].y - object->y);
+            return atan2f(
+                m_players[m_playerNumber].y - object->y,
+                m_players[m_playerNumber].x - object->x);
         }
     }
     return 0.0f;
@@ -164,9 +168,9 @@ static void get_object_force(struct GameObject const *object, float *forceX, flo
             if (object->hp >= m_players[m_playerNumber].hp) {
                 // bigger player attracts the player
                 float scalar = 1.0f;
-                //if (is_in_sight(&m_players[m_playerNumber])) {
-                    //scalar = IN_SIGHT_MODIFIER;
-                //}
+                if (is_in_sight(&m_players[m_playerNumber])) {
+                    scalar = IN_SIGHT_MODIFIER;
+                }
                 *forceX += REPULSION_BIGGER_PLAYER * inverseDistanceSquared * inverseDistanceSquared * distanceX * scalar;
                 *forceY += REPULSION_BIGGER_PLAYER * inverseDistanceSquared * inverseDistanceSquared * distanceY * scalar;
             } else if(object->hp < m_players[m_playerNumber].hp) {
@@ -237,8 +241,9 @@ static bool is_bigger_player_ahead(void) {
                                 (m_players[i].y - m_players[m_playerNumber].y) * (m_players[i].y - m_players[m_playerNumber].y);
                       
         if(distanceSquared < BIGGER_PLAYER_THRESHOLD && m_players[i].hp > m_players[m_playerNumber].hp) {
-            //if(is_in_sight(&m_players[i]));
-            return true;
+            if(is_in_sight(&m_players[i])) {
+                return true;
+            }
         }
     }
     return false;
