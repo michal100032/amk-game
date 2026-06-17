@@ -16,15 +16,21 @@ static float m_mapHeight;
 #define MAX_GLUE 8
 #define MAX_SPARKS 24
 
+//constants
 #define REPULSION_GLUE            (-10.0e6f)
-#define REPULSION_SPARK           ( -0.6e6f)
-//#define REPULSION_BIGGER_PLAYER   ( -5.0e5f) //placeholder with angle experiments
-#define REPULSION_BIGGER_PLAYER   ( -1.0e6f)
-#define ATTRACTION_FOOD           ( 240.0f)
-#define ATTRACTION_SMALLER_PLAYER ( 120.0f)
-#define IN_SIGHT_MODIFIER         ( 10.0f)
+#define REPULSION_SPARK           ( -10.0e6f) 
 
-#define BIGGER_PLAYER_THRESHOLD 100.0f
+#define BIGGER_PLAYER_THRESHOLD 150.0f
+#define SMALLER_PLAYER_THRESHOLD 300.0f
+#define PREDICTION_TIME 5.0f
+#define DISTANCE_MOD 100.0f
+
+//variable depending on state
+static float foodWeight;
+static float smallerPlayerWeight;
+static float biggerPlayerWeight;
+
+
 
 enum object_type {
     OBJECT_TYPE_PLAYER = 0,
@@ -33,12 +39,15 @@ enum object_type {
     OBJECT_TYPE_GLUE = 3
 };
 
-//WIP
-//enum BotState {
- //   BOT_EAT,
- //   BOT_HUNT,
- //   BOT_RUN
-//};
+//enum to set bot state
+enum BotState {
+    BOT_EAT,
+    BOT_HUNT,
+    BOT_RUN
+};
+
+static enum BotState m_botState = BOT_EAT;
+
 
 struct GameObject {
     enum object_type objectType; // 0 = player, 1 = food, 2 = spark, 3 = glue
@@ -56,6 +65,45 @@ static struct GameObject m_players[MAX_PLAYERS];
 static struct GameObject m_food[MAX_FOOD];
 static struct GameObject m_glue[MAX_GLUE];
 static struct GameObject m_sparks[MAX_SPARKS];
+
+//actively track players to set state
+static void update_bot_state(void)
+{
+
+    bool danger = false;
+    bool preyAvailable = false;
+
+    for(size_t i = 0; i < MAX_PLAYERS; i++) {
+
+        if(i == m_playerNumber || m_players[i].hp <= 0) {
+            continue;
+        }
+
+        float dx = m_players[i].x - m_players[m_playerNumber].x;
+        float dy = m_players[i].y - m_players[m_playerNumber].y;
+        float dist2 = (dx * dx) + (dy * dy);
+
+        if(m_players[i].hp > m_players[m_playerNumber].hp && dist2 < BIGGER_PLAYER_THRESHOLD)
+        {
+            danger = true;
+        }
+
+        if(m_players[i].hp < m_players[m_playerNumber].hp && dist2 < SMALLER_PLAYER_THRESHOLD)
+        {
+            preyAvailable = true;
+        }
+    }
+
+    if(danger) {
+        m_botState = BOT_RUN;
+    }
+    else if(preyAvailable) {
+        m_botState = BOT_HUNT;
+    }
+    else {
+        m_botState = BOT_EAT;
+    }
+}
 
 // update params after receiving NEW_GAME.request packet
 void game_set_params(uint8_t playerNumber, uint8_t numberOfPlayers, float mapWidth, float mapHeight) {
@@ -108,6 +156,70 @@ static void update_object_state(uint8_t objectType, uint16_t objectNo, int8_t hp
     }
 }
 
+
+//calculate velocity
+static void get_velocity(const struct GameObject *obj, float *vx, float *vy)
+{
+    if (!obj->hasPreviousPosition) {
+        *vx = 0.0f;
+        *vy = 0.0f;
+        return;
+    }
+
+    *vx = obj->x - obj->xPrev;
+    *vy = obj->y - obj->yPrev;
+}
+
+
+//predict objects positions
+
+static void predict_position_weighted(const struct GameObject *obj, float *px, float *py)
+{
+    float vx, vy;
+    get_velocity(obj, &vx, &vy);
+
+
+    float predX = obj->x + vx * PREDICTION_TIME;
+    float predY = obj->y + vy * PREDICTION_TIME;
+
+    float dx = obj->x - m_players[m_playerNumber].x;
+    float dy = obj->y - m_players[m_playerNumber].y;
+
+    float dist2 = dx*dx + dy*dy;
+
+    float w = dist2 / (DISTANCE_MOD + dist2);
+
+
+    *px = obj->x + (predX - obj->x) * w;
+    *py = obj->y + (predY - obj->y) * w;
+}
+
+static void update_weights(void)
+{
+    switch(m_botState) {
+
+    case BOT_EAT:
+        foodWeight          = 1000.0f;
+        smallerPlayerWeight = 5000.0f;
+        biggerPlayerWeight  = -100000.0f;
+        break;
+
+    case BOT_HUNT:
+        foodWeight          = 50.0f;
+        smallerPlayerWeight = 200000.0f;
+        biggerPlayerWeight  = -500000.0f;
+        break;
+
+    case BOT_RUN:
+        foodWeight          = 50.0f;
+        smallerPlayerWeight = 50000.0f;
+        biggerPlayerWeight  = -1000000.0f;
+        break;
+    }
+}
+
+//NOT USED RN
+//
 //get angle at wich the player is pointing
 static float get_players_angle(struct GameObject *object) {
     if(OBJECT_TYPE_PLAYER == object->objectType) {
@@ -145,6 +257,29 @@ static bool is_in_sight(struct GameObject *object) {
     }
 }
 
+//end of NOT USED RN
+
+static uint8_t count_food_nearby(size_t foodIndex, float radius)
+{
+    uint8_t count = 0;
+
+    float radiusSquared = radius * radius;
+
+    for(size_t i = 0; i < MAX_FOOD; i++) {
+        if(i == foodIndex || m_food[i].hp <= 0)
+            continue;
+
+        float dx = m_food[i].x - m_food[foodIndex].x;
+        float dy = m_food[i].y - m_food[foodIndex].y;
+
+        if(dx * dx + dy * dy < radiusSquared) {
+            count++;
+        }
+    }
+
+    return count;
+}
+
 static int get_nearest_food_index(float x, float y) {
     int nearestFoodIndex = -1;
     float nearestFoodDistance = 0.0f;
@@ -168,31 +303,29 @@ void game_update_object(uint8_t objectType, uint16_t objectNo, int8_t hp, float 
 }
 
 static void get_object_force(struct GameObject const *object, float *forceX, float *forceY) {
-    float distanceX = object->x - m_players[m_playerNumber].x;
-    float distanceY = object->y - m_players[m_playerNumber].y;
+    float objX, objY;
+    predict_position_weighted(object, &objX, &objY);
+    float distanceX = objX - m_players[m_playerNumber].x;
+    float distanceY = objY - m_players[m_playerNumber].y;
     float distanceSquared = distanceX * distanceX + distanceY * distanceY;
     float inverseDistanceSquared = 1.0f / (distanceSquared + 0.0001f); // add small value to avoid division by zero
 
     switch(object->objectType) {
         case OBJECT_TYPE_PLAYER:
-            if (object->hp >= m_players[m_playerNumber].hp) {
-                // bigger player attracts the player
-                //float scalar = 1.0f;
-                //if (is_in_sight((struct GameObject *)object)) {
-                 //   scalar = IN_SIGHT_MODIFIER;
-                //}
-                *forceX += REPULSION_BIGGER_PLAYER * inverseDistanceSquared * inverseDistanceSquared * distanceX; //* scalar
-                *forceY += REPULSION_BIGGER_PLAYER * inverseDistanceSquared * inverseDistanceSquared * distanceY; //* scalar
-            } else if(object->hp < m_players[m_playerNumber].hp) {
-                // smaller player repels the player
-                *forceX += ATTRACTION_SMALLER_PLAYER * inverseDistanceSquared * distanceX;
-                *forceY += ATTRACTION_SMALLER_PLAYER * inverseDistanceSquared * distanceY;
+            if(object->hp >= m_players[m_playerNumber].hp) {
+                *forceX += biggerPlayerWeight *inverseDistanceSquared *inverseDistanceSquared *distanceX;
+                *forceY += biggerPlayerWeight *inverseDistanceSquared *inverseDistanceSquared *distanceY;
+            } else{
+                *forceX += smallerPlayerWeight *inverseDistanceSquared *distanceX;
+                *forceY += smallerPlayerWeight *inverseDistanceSquared *distanceY;
             }
             break;
         case OBJECT_TYPE_FOOD:
             // food attracts the player
-            *forceX += ATTRACTION_FOOD * inverseDistanceSquared * distanceX;
-            *forceY += ATTRACTION_FOOD * inverseDistanceSquared * distanceY;
+            uint8_t nearbyFood = count_food_nearby((size_t)(object - m_food),50.0f);
+            float clusterMultiplier = 1.0f + nearbyFood * 5.0f;
+            *forceX += foodWeight *clusterMultiplier *inverseDistanceSquared *distanceX;
+            *forceY += foodWeight *clusterMultiplier *inverseDistanceSquared *distanceY;
             break;
         case OBJECT_TYPE_SPARK:
             // sparks repel the player
@@ -200,7 +333,7 @@ static void get_object_force(struct GameObject const *object, float *forceX, flo
             *forceY += REPULSION_SPARK * inverseDistanceSquared * inverseDistanceSquared * distanceY;
             break;
         case OBJECT_TYPE_GLUE:
-            // glue attracts the player but reduces its speed
+            // glue repells the player
             *forceX += REPULSION_GLUE * inverseDistanceSquared * inverseDistanceSquared * distanceX;
             *forceY += REPULSION_GLUE * inverseDistanceSquared * inverseDistanceSquared * distanceY;
             break;
@@ -266,24 +399,17 @@ static bool is_bigger_player_ahead(void) {
 }
 
 // for AMCOM_MoveResponsePayload respose packet
-void game_get_action(float *angle, uint8_t *action) {
+void game_get_action(float *angle, uint8_t *action)
+{
+    update_bot_state();
+    update_weights();
+
     float forceX = 0.0f;
     float forceY = 0.0f;
+
     get_total_force(&forceX, &forceY);
-    printf("Total force: (%f, %f)\n", forceX, forceY);
+
     *angle = atan2f(forceY, forceX);
-    printf("Angle: %f\n", *angle);
-    *action = is_bigger_player_ahead() ? 1 : 0; // drop spark if there is a bigger player ahead, otherwise do nothing
 
-
-    // uint8_t foodIndex = get_nearest_food_index(m_players[m_playerNumber].x, m_players[m_playerNumber].y);
-    // if(foodIndex != (uint8_t)-1) {
-    //     float dx = m_food[foodIndex].x - m_players[m_playerNumber].x;
-    //     float dy = m_food[foodIndex].y - m_players[m_playerNumber].y;
-    //     *angle = atan2f(dy, dx);
-    //     *action = 0; // move towards the food
-    // } else {
-    //     *angle = 0.0f;
-    //     *action = 0; // no food available, do nothing
-    // }
+    *action = (m_botState == BOT_RUN);
 }
